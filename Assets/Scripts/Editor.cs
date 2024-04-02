@@ -12,6 +12,8 @@ public class Editor : MonoBehaviour
 
     public int Snapping;
 
+    public static int PrefabID;
+
     private List<GameObject> instantiatedPrefabs;
 
     private int currentPrefabIndex;
@@ -39,10 +41,9 @@ public class Editor : MonoBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        if (collision.transform.gameObject == this.gameObject)
-            return;
-
-        if (collision.transform.parent == transform.parent)
+        PrefabInstance ghostInstance = ghost.GetComponentInParent<PrefabInstance>();
+        PrefabInstance instance = collision.gameObject.GetComponentInParent<PrefabInstance>();
+        if (instance != null && ghostInstance.ID == instance.ID)
             return;
 
         collisionDetected = true;
@@ -51,10 +52,9 @@ public class Editor : MonoBehaviour
 
     private void OnCollisionExit(Collision collision)
     {
-        if (collision.transform.gameObject == this.gameObject)
-            return;
-
-        if (collision.transform.parent == transform.parent)
+        PrefabInstance ghostInstance = ghost.GetComponentInParent<PrefabInstance>();
+        PrefabInstance instance = collision.gameObject.GetComponentInParent<PrefabInstance>();
+        if (instance != null && ghostInstance.ID == instance.ID)
             return;
 
         collisions--;
@@ -68,6 +68,8 @@ public class Editor : MonoBehaviour
             Destroy(ghost);
 
         ghost = Instantiate(prefabs[currentPrefabIndex], transform);
+        collisions = 0;
+        collisionDetected = false;
     }
 
     // Update is called once per frame
