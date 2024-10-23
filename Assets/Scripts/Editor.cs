@@ -2,106 +2,205 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Xml;
 using Unity.VisualScripting;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 
-public enum PrefabType
+public enum EditorMode
+{
+    STRUCTURE,
+    FURNITURE
+}
+
+public enum StructureType
 {
     MIDDLE,
     WALL,
     CORNER,
     DOOR,
-    WINDOW
+    WINDOW,
+    TWO_WALL,
+    INNER_DOOR,
+    INNER_WALL,
+    INNER_CORNER
 }
 
-public struct PrefabContainer
+public enum FurnitureType
+{
+    SOFA,
+    TABLE,
+    CHAIR,
+    FRIDGE,
+    CABINET1,
+    CABINET2,
+    WALL_WINE,
+    BAR_CABINET,
+    TV,
+    BED_SMALL,
+    END_TABLE,
+    DRESSER,
+    BED_BIG,
+    TABLE_LAMP,
+    BATHROOM_COUNTER,
+    BATH_TUB,
+    HAMPER,
+    MIRROR,
+    OFFICE_CHAIR,
+    RUG,
+    COMPUTER_DESK,
+    STOVE,
+    COFFEE_TABLE
+}
+
+public struct PrefabContainer<T> where T : struct, IConvertible
 {
     public GameObject prefabObject;
-    public PrefabType prefabType;
+    public T type;
 
-    public PrefabContainer(GameObject prefabObject, PrefabType prefabType)
+    public PrefabContainer(GameObject prefabObject, T type)
     {
         this.prefabObject = prefabObject;
-        this.prefabType = prefabType;
+        this.type = type;
     }
+}
+
+public class DoorNode
+{
+    public GameObject Door;
+    public DoorNode Next;
+}
+
+public class PrefabCatalogue<T> where T : struct, IConvertible
+{
+    private List<GameObject> prefabs;
+    private int currentIndex;
+    private T currentType;
+
+    public PrefabCatalogue(List<GameObject> prefabs)
+    {
+        if (!typeof(T).IsEnum)
+        {
+            throw new ArgumentException("T must be an enum.");
+        }
+
+        this.prefabs = prefabs;
+        currentIndex = 0;
+        currentType = default;
+    }
+
+    public void CycleUp()
+    {
+        currentIndex++;
+        if (currentIndex > prefabs.Count - 1)
+            currentIndex = 0;
+
+        currentType = (T)(object)currentIndex;
+    }
+
+    public void CycleDown()
+    {
+        currentIndex--;
+        if (currentIndex < 0)
+            currentIndex = prefabs.Count - 1;
+
+        currentType = (T)(object)currentIndex;
+    }
+
+    public GameObject GetSelected()
+    {
+        return prefabs[currentIndex];
+    }
+
+    public T GetSelectedType()
+    {
+        return currentType;
+    }
+
 }
 
 public class Editor : MonoBehaviour
 {
+    public EditorMode mode;
+
+    public List<GameObject> structurePrefabs;
+    public List<GameObject> furniturePrefabs;
+
+    private PrefabCatalogue<StructureType> structures;
+    private PrefabCatalogue<FurnitureType> furniture;
+
     public float cameraSpeed;
     public Camera editorCamera;
-    public List<GameObject> prefabs;
+
 
     public int Snapping;
 
-    public static int PrefabID;
+    private Dictionary<int, PrefabContainer<StructureType>> structurePositions;
+    private Dictionary<int, PrefabContainer<FurnitureType>> furniturePositions;
 
-    private Dictionary<int, PrefabContainer> takenPositions;
-
-    private int currentPrefabIndex;
-    private PrefabType currentPrefabType;
+    private Vector3 startPosition;
 
     private GameObject ghost;
 
     private float horizontal;
     private float vertical;
     private float rotation;
+    private float rotationIncrement;
 
     private Plane hitscanPlane;
 
-    private bool collisionDetected;
-    public int collisions;
+    public GameObject temp;
+
+    private bool[,] graph;
+    private int[,] graphHashes;
 
     // Start is called before the first frame update
     void Start()
     {
-        takenPositions = new Dictionary<int, PrefabContainer>();
+        mode = EditorMode.STRUCTURE;
+
+        structures = new PrefabCatalogue<StructureType>(structurePrefabs);
+        furniture = new PrefabCatalogue<FurnitureType>(furniturePrefabs);
+
+        structurePositions = new Dictionary<int, PrefabContainer<StructureType>>();
+        furniturePositions = new Dictionary<int, PrefabContainer<FurnitureType>>();
 
         hitscanPlane = new Plane(Vector2.down, 0f);
 
-        currentPrefabIndex = 0;
-
-        currentPrefabType = (PrefabType)currentPrefabIndex;
+        rotationIncrement = 90;
 
         UpdatePrefabGhost();
     }
 
-    void OnCollisionEnter(Collision collision)
-    {
-        PrefabInstance ghostInstance = ghost.GetComponentInParent<PrefabInstance>();
-        PrefabInstance instance = collision.gameObject.GetComponentInParent<PrefabInstance>();
-        if (instance != null && ghostInstance.ID == instance.ID)
-            return;
-
-        collisionDetected = true;
-        collisions++;
-    }
-
-    private void OnCollisionExit(Collision collision)
-    {
-        PrefabInstance ghostInstance = ghost.GetComponentInParent<PrefabInstance>();
-        PrefabInstance instance = collision.gameObject.GetComponentInParent<PrefabInstance>();
-        if (instance != null && ghostInstance.ID == instance.ID)
-            return;
-
-        collisions--;
-        if (collisions == 0)
-            collisionDetected = false;
-    }
-
     void UpdatePrefabGhost()
     {
-        if (ghost != null)
-            Destroy(ghost);
+        GameObject newGhost = null;
+        
+        switch (mode)
+        {
+            case EditorMode.STRUCTURE:
+                newGhost = Instantiate(structures.GetSelected(), transform);
+                break;
+            case EditorMode.FURNITURE:
+                newGhost = Instantiate(furniture.GetSelected(), transform);
+                break;
+            default:
+                newGhost = null;
+                break;
+        }
+        
 
-        ghost = Instantiate(prefabs[currentPrefabIndex], transform);
-        collisions = 0;
-        collisionDetected = false;
+        if (newGhost != null && ghost != null)
+        {
+            newGhost.transform.rotation = ghost.transform.rotation;
+            Destroy(ghost);
+        }
+
+        ghost = newGhost;
     }
 
-    public static int HashableInt(Vector3 vector)
+    public static int HashableVector(Vector3 vector)
     {
         int x = Mathf.RoundToInt(vector.x);
         int y = Mathf.RoundToInt(vector.y);
@@ -120,10 +219,77 @@ public class Editor : MonoBehaviour
     }
 
     private void CalculateZones()
-    { 
-        foreach (KeyValuePair<int, PrefabContainer> prefab in takenPositions)
-        {
+    {
+        Vector2 minPosition = new Vector2(float.MaxValue, float.MaxValue);
+        Vector2 maxPosition = new Vector2(float.MinValue, float.MinValue);
 
+        foreach (KeyValuePair<int, PrefabContainer<StructureType>> pair in structurePositions)
+        {
+            if (pair.Value.prefabObject.IsDestroyed())
+                continue;
+
+            GameObject prefab = pair.Value.prefabObject;
+            Vector2 convertedPos = new Vector2(prefab.transform.position.x, prefab.transform.position.z);
+            if (convertedPos.x <= minPosition.x)
+            {
+                minPosition.x = convertedPos.x;
+            }
+
+            if (convertedPos.y <= minPosition.y)
+            {
+                minPosition.y = convertedPos.y;
+            }
+
+            if (convertedPos.x >= maxPosition.x)
+            {
+                maxPosition.x = convertedPos.x;
+            }
+
+            if (convertedPos.y >= maxPosition.y)
+            {
+                maxPosition.y = convertedPos.y;
+            }
+        }
+
+        Vector2 diff = maxPosition - minPosition;
+        diff /= 5;
+        diff = new Vector2(Mathf.Round(diff.x), Mathf.Round(diff.y));
+
+        graph = new bool[(int)diff.x + 1, (int)diff.y + 1];
+        graphHashes = new int[(int)diff.x + 1, (int)diff.y + 1];
+        for (float x = minPosition.x; x <= maxPosition.x; x += 5)
+        {
+            for (float y = maxPosition.y; y >= minPosition.y; y -= 5)
+            {
+                float correctedX = x + Mathf.Abs(minPosition.x);
+                float correctedY = y + Mathf.Abs(minPosition.y);
+                correctedX /= 5.0f;
+                correctedY = MathF.Abs((correctedY / 5.0f) - diff.y);
+
+                int hash = HashableVector(new Vector3(x, 0, y));
+                if (structurePositions.ContainsKey(hash))
+                {
+                    graph[(int)correctedX, (int)correctedY] = true;
+                }
+                else
+                {
+                    graph[(int)correctedX, (int)correctedY] = false;
+                }
+
+                graphHashes[(int)correctedX, (int)correctedY] = HashableVector(new Vector3(x, 0, y));
+
+                GameObject testCube = Instantiate(temp);
+                testCube.transform.position = new Vector3(x, 0, y);
+
+                if (graph[(int)correctedX, (int)correctedY])
+                {
+                    testCube.GetComponent<MeshRenderer>().material.color = Color.green;
+                }
+                else
+                {
+                    testCube.GetComponent<MeshRenderer>().material.color = Color.red;
+                }
+            }
         }
     }
 
@@ -134,19 +300,63 @@ public class Editor : MonoBehaviour
 
         XmlWriter writer = XmlWriter.Create("map.xml", settings);
         writer.WriteStartDocument();
-        writer.WriteStartElement(Path.GetFileNameWithoutExtension(name));
+        writer.WriteStartElement("map");
 
-        writer.WriteStartElement("Prefabs");
-        foreach (KeyValuePair<int, PrefabContainer> prefab in takenPositions)
+        writer.WriteStartElement("Start");
+        writer.WriteElementString("X", startPosition.x.ToString());
+        writer.WriteElementString("Y", startPosition.y.ToString());
+        writer.WriteElementString("Z", startPosition.z.ToString());
+        writer.WriteEndElement();
+
+        writer.WriteStartElement("Structures");
+        foreach (KeyValuePair<int, PrefabContainer<StructureType>> prefab in structurePositions)
         {
-            writer.WriteStartElement("Prefab");
+            if (prefab.Value.prefabObject.IsDestroyed())
+                continue;
+
+            writer.WriteStartElement("Structure");
             writer.WriteElementString("X", prefab.Value.prefabObject.transform.position.x.ToString());
             writer.WriteElementString("Y", prefab.Value.prefabObject.transform.position.y.ToString());
             writer.WriteElementString("Z", prefab.Value.prefabObject.transform.position.z.ToString());
             writer.WriteElementString("Rotation", prefab.Value.prefabObject.transform.rotation.eulerAngles.y.ToString());
-            writer.WriteElementString("Type", prefab.Value.prefabType.ToString());
+            writer.WriteElementString("Type", prefab.Value.type.ToString());
             writer.WriteEndElement();
         }
+        writer.WriteEndElement();
+
+        writer.WriteStartElement("Furniture");
+        foreach (KeyValuePair<int, PrefabContainer<FurnitureType>> prefab in furniturePositions)
+        {
+            if (prefab.Value.prefabObject.IsDestroyed())
+                continue;
+
+            writer.WriteStartElement("Furniture");
+            writer.WriteElementString("X", prefab.Value.prefabObject.transform.position.x.ToString());
+            writer.WriteElementString("Y", prefab.Value.prefabObject.transform.position.y.ToString());
+            writer.WriteElementString("Z", prefab.Value.prefabObject.transform.position.z.ToString());
+            writer.WriteElementString("Rotation", prefab.Value.prefabObject.transform.rotation.eulerAngles.y.ToString());
+            writer.WriteElementString("Type", prefab.Value.type.ToString());
+            writer.WriteEndElement();
+        }
+        writer.WriteEndElement();
+
+        writer.WriteStartElement("Graph");
+        writer.WriteElementString("Width", graph.GetLength(0).ToString());
+        writer.WriteElementString("Height", graph.GetLength(1).ToString());
+        writer.WriteStartElement("Nodes");
+        for (int x = 0; x < graph.GetLength(0); x++)
+        {
+            for (int y = 0; y < graph.GetLength(1); y++)
+            {
+                writer.WriteStartElement("Node");
+                writer.WriteElementString("X", x.ToString());
+                writer.WriteElementString("Y", y.ToString());
+                writer.WriteElementString("RelatedHash", graphHashes[x, y].ToString());
+                writer.WriteElementString("Passable", graph[x, y].ToString());
+                writer.WriteEndElement();
+            }
+        }
+        writer.WriteEndElement();
         writer.WriteEndElement();
 
         writer.WriteEndElement();
@@ -194,15 +404,15 @@ public class Editor : MonoBehaviour
                 return false;
 
             reader.ReadToFollowing("Type");
-            success = TryParseEnum(reader.ReadElementContentAsString(), out PrefabType Type);
+            success = TryParseEnum(reader.ReadElementContentAsString(), out StructureType Type);
             if (!success)
                 return false;
 
-            GameObject instance = Instantiate(prefabs[(int)Type]);
+            GameObject instance = Instantiate(structurePrefabs[(int)Type]);
             instance.transform.position = new Vector3(X, Y, Z);
             instance.transform.rotation = Quaternion.Euler(0, Rotation, 0);
 
-            takenPositions.Add(HashableInt(new Vector3(X, Y, Z)), new PrefabContainer(instance, Type));
+            structurePositions.Add(HashableVector(new Vector3(X, Y, Z)), new PrefabContainer<StructureType>(instance, Type));
         }
 
         reader.Close();
@@ -212,11 +422,18 @@ public class Editor : MonoBehaviour
 
     private void ClearLevel()
     {
-        foreach (KeyValuePair<int, PrefabContainer> prefab in takenPositions)
+        foreach (KeyValuePair<int, PrefabContainer<StructureType>> prefab in structurePositions)
         {
             Destroy(prefab.Value.prefabObject);
         }
-        takenPositions.Clear();
+
+        foreach (KeyValuePair<int, PrefabContainer<FurnitureType>> prefab in furniturePositions)
+        {
+            Destroy(prefab.Value.prefabObject);
+        }
+
+        structurePositions.Clear();
+        furniturePositions.Clear();
     }
 
     // Update is called once per frame
@@ -227,22 +444,28 @@ public class Editor : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.R))
         {
-            currentPrefabIndex--;
-            if (currentPrefabIndex < 0)
-                currentPrefabIndex = prefabs.Count - 1;
-
-            currentPrefabType = (PrefabType)currentPrefabIndex;
-
+            switch (mode)
+            {
+                case EditorMode.STRUCTURE:
+                    structures.CycleDown();
+                    break;
+                case EditorMode.FURNITURE:
+                    furniture.CycleDown();
+                    break;
+            }
             UpdatePrefabGhost();
         }
         else if (Input.GetKeyDown(KeyCode.T))
         {
-            currentPrefabIndex++;
-            if (currentPrefabIndex > prefabs.Count - 1)
-                currentPrefabIndex = 0;
-
-            currentPrefabType = (PrefabType)currentPrefabIndex;
-
+            switch (mode)
+            {
+                case EditorMode.STRUCTURE:
+                    structures.CycleUp();
+                    break;
+                case EditorMode.FURNITURE:
+                    furniture.CycleUp();
+                    break;
+            }
             UpdatePrefabGhost();
         }
 
@@ -266,36 +489,102 @@ public class Editor : MonoBehaviour
             ClearLevel();
         }
 
-        if (Input.GetKeyDown(KeyCode.Q))
-            rotation -= 90;
-        else if (Input.GetKeyDown(KeyCode.E))
-            rotation += 90;
+        if (Input.GetKeyDown(KeyCode.Tab))
+        {
+            mode++;
+            if ((int)mode > Enum.GetValues(typeof(EditorMode)).Cast<int>().Max())
+                mode = 0;
 
-        Ray ray = editorCamera.ScreenPointToRay(Input.mousePosition);
-        hitscanPlane.Raycast(ray, out float distance);
-        Vector3 rayPosition = ray.GetPoint(distance);
-        ghost.transform.position = new Vector3(MathF.Round(rayPosition.x / 5) * 5, rayPosition.y, MathF.Round(rayPosition.z / 5) * 5);
-        ghost.transform.Rotate(0, rotation, 0);
+            switch (mode)
+            {
+                case EditorMode.STRUCTURE:
+                    rotationIncrement = 90;
+                    break;
+                case EditorMode.FURNITURE:
+                    rotationIncrement = 45;
+                    break;
+            }
+
+            UpdatePrefabGhost();
+            rotation = 0;
+        }
+
+        if (Input.GetKeyDown(KeyCode.F))
+        {
+
+        }
+
+        if (Input.GetKeyDown(KeyCode.Q))
+            rotation -= rotationIncrement;
+        else if (Input.GetKeyDown(KeyCode.E))
+            rotation += rotationIncrement;
 
         if (horizontal != 0 || vertical != 0)
             editorCamera.transform.position += cameraSpeed * Time.deltaTime * new Vector3(horizontal, 0, vertical);
 
-        if (Input.GetButtonDown("Fire1") && !takenPositions.ContainsKey(HashableInt(ghost.transform.position)))
+        Ray ray = editorCamera.ScreenPointToRay(Input.mousePosition);
+        hitscanPlane.Raycast(ray, out float distance);
+        Vector3 rayPosition = ray.GetPoint(distance);
+
+        switch (mode)
         {
-            GameObject instance = Instantiate(prefabs[currentPrefabIndex]);
-            instance.transform.position = ghost.transform.position;
-            instance.transform.rotation = ghost.transform.rotation;
-            takenPositions.Add(HashableInt(instance.transform.position), new PrefabContainer(instance, currentPrefabType));
+            case EditorMode.STRUCTURE:
+                ghost.transform.position = new Vector3(MathF.Round(rayPosition.x / 5) * 5, 0, MathF.Round(rayPosition.z / 5) * 5);
+                break;
+            case EditorMode.FURNITURE:
+                ghost.transform.position = new Vector3(MathF.Round(rayPosition.x / 0.625f) * 0.625f, 0, MathF.Round(rayPosition.z / 0.625f) * 0.625f);
+                break;
         }
 
-        if (Input.GetButtonDown("Fire2") && takenPositions.ContainsKey(HashableInt(ghost.transform.position)))
+        
+        ghost.transform.Rotate(0, rotation, 0);
+
+        Vector3 ghostPosition = new Vector3(ghost.transform.position.x, 0, ghost.transform.position.z);
+        int ghostHash = HashableVector(ghostPosition);
+
+        if (Input.GetKeyDown(KeyCode.M))
         {
-            GameObject instance = takenPositions[HashableInt(ghost.transform.position)].prefabObject;
-            Destroy(instance);
-            takenPositions.Remove(HashableInt(ghost.transform.position));
+            startPosition = new Vector3(ghostPosition.x, 0, ghostPosition.z);
+        }
+
+        if (mode == EditorMode.STRUCTURE)
+        {
+            if (Input.GetButton("Fire1") && !structurePositions.ContainsKey(ghostHash))
+            {
+                GameObject instance = Instantiate(structures.GetSelected());
+                instance.transform.position = ghostPosition;
+                instance.transform.rotation = ghost.transform.rotation;
+                structurePositions.Add(ghostHash, new PrefabContainer<StructureType>(instance, structures.GetSelectedType()));
+            }
+
+            if (Input.GetButtonDown("Fire2") && structurePositions.ContainsKey(ghostHash))
+            {
+                GameObject instance = structurePositions[ghostHash].prefabObject;
+                Destroy(instance);
+                structurePositions.Remove(ghostHash);
+            }
+        }
+        else if (mode == EditorMode.FURNITURE)
+        {
+            if (Input.GetButton("Fire1") && !furniturePositions.ContainsKey(ghostHash))
+            {
+                GameObject instance = Instantiate(furniture.GetSelected());
+                instance.transform.position = ghostPosition;
+                instance.transform.rotation = ghost.transform.rotation;
+                furniturePositions.Add(ghostHash, new PrefabContainer<FurnitureType>(instance, furniture.GetSelectedType()));
+            }
+
+            if (Input.GetButtonDown("Fire2") && furniturePositions.ContainsKey(ghostHash))
+            {
+                GameObject instance = furniturePositions[ghostHash].prefabObject;
+                Destroy(instance);
+                furniturePositions.Remove(ghostHash);
+            }
         }
 
         rotation = 0;
+
+
     }
 
 }
